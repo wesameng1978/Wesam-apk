@@ -16,3 +16,10 @@
 - The release AAB is unsigned; configure your own upload key before Play submission.
 - The language menu contains 20 selectable languages. Full translation of every string into all 20 locales is a follow-up localization pass; the selector and RTL-ready Arabic resource foundation are included.
 - Storage browsing follows Android's shared-storage rules and cannot promise protected app-private paths.
+
+## Performance hotfix — v1.0.1
+- File discovery now runs on `Dispatchers.IO` with cancellation of stale scans.
+- Installed-app discovery now runs off the main thread, is guarded against duplicate reloads, and is capped to a safe visible list size.
+- File listings are capped at 250 entries per directory to avoid freezing on huge folders.
+- APK/app refresh is explicit and shows a loading indicator instead of blocking the screen.
+- Folder rows no longer call `listFiles()` during Compose rendering.

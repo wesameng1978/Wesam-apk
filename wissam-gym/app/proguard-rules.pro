@@ -1,0 +1,1 @@
+# WISSAM GYM rules

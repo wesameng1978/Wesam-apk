@@ -1,0 +1,1 @@
+<resources><style name="Theme.WissamFileMaster" parent="android:style/Theme.Material.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#12B8F5</item><item name="android:navigationBarColor">#070D18</item><item name="android:statusBarColor">#070D18</item><item name="android:windowLightStatusBar">false</item></style></resources>

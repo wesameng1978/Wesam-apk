@@ -31,7 +31,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.wissam.filemaster.ui.asPainter
 import java.io.File
 import java.text.DateFormat
@@ -41,10 +46,53 @@ private val Navy=Color(0xFF070D18); private val Surface=Color(0xFF101B2D); priva
 private val Languages=listOf("English","العربية","Français","Español","Deutsch","Italiano","Português","Türkçe","Русский","中文","日本語","한국어","हिन्दी","فارسی","اردو","বাংলা","Bahasa Indonesia","ไทย","Nederlands","Polski")
 data class AppRow(val label:String,val pkg:String,val version:String,val icon:android.graphics.drawable.Drawable?,val source:String?)
 class MainVm:ViewModel(){
- var tab by mutableStateOf(0); var currentDir by mutableStateOf(Environment.getExternalStorageDirectory()); var language by mutableStateOf("English"); var settings by mutableStateOf(false); var toolMessage by mutableStateOf<String?>(null)
- var files by mutableStateOf(listOf<File>()); var apps by mutableStateOf(listOf<AppRow>()); var query by mutableStateOf("")
- fun loadFiles(dir:File=currentDir){currentDir=dir;files=(dir.listFiles()?.sortedWith(compareByDescending<File>{it.isDirectory}.thenBy{it.name.lowercase()})?:emptyList()).toList()}
- fun loadApps(ctx:Context){apps=ctx.packageManager.getInstalledApplications(0).map{i->val p=ctx.packageManager.getPackageInfo(i.packageName,0);AppRow(i.loadLabel(ctx.packageManager).toString(),i.packageName,p.versionName?:"—",i.loadIcon(ctx.packageManager),i.sourceDir)}.sortedBy{it.label.lowercase()}}
+    var tab by mutableStateOf(0)
+    var currentDir by mutableStateOf(Environment.getExternalStorageDirectory())
+    var language by mutableStateOf("English")
+    var settings by mutableStateOf(false)
+    var toolMessage by mutableStateOf<String?>(null)
+    var files by mutableStateOf(listOf<File>())
+    var apps by mutableStateOf(listOf<AppRow>())
+    var query by mutableStateOf("")
+    var filesLoading by mutableStateOf(false)
+    var appsLoading by mutableStateOf(false)
+    private var filesJob: Job? = null
+    private var appsJob: Job? = null
+
+    fun loadFiles(dir: File = currentDir) {
+        currentDir = dir
+        filesJob?.cancel()
+        filesLoading = true
+        filesJob = viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    dir.listFiles()?.asSequence()
+                        ?.sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
+                        ?.take(250)?.toList() ?: emptyList()
+                }.getOrDefault(emptyList())
+            }
+            if (currentDir.absolutePath == dir.absolutePath) files = result
+            filesLoading = false
+        }
+    }
+
+    fun loadApps(ctx: Context, force: Boolean = false) {
+        if (apps.isNotEmpty() && !force) return
+        appsJob?.cancel()
+        appsLoading = true
+        appsJob = viewModelScope.launch {
+            val result = withContext(Dispatchers.Default) {
+                ctx.packageManager.getInstalledApplications(0).asSequence().mapNotNull { info ->
+                    runCatching {
+                        val p = ctx.packageManager.getPackageInfo(info.packageName, 0)
+                        AppRow(info.loadLabel(ctx.packageManager).toString(), info.packageName, p.versionName ?: "—", info.loadIcon(ctx.packageManager), info.sourceDir)
+                    }.getOrNull()
+                }.sortedBy { it.label.lowercase() }.take(300).toList()
+            }
+            apps = result
+            appsLoading = false
+        }
+    }
 }
 @Composable
 fun AppTheme(content: @Composable () -> Unit) {
@@ -81,10 +129,10 @@ fun Root(vm: MainVm = viewModel()) {
 @Composable fun StorageCard(){val s=StatFs(Environment.getExternalStorageDirectory().path);val total=s.totalBytes.toDouble();val free=s.availableBytes.toDouble();val used=(total-free).coerceAtLeast(0.0);val pct=(used/total).toFloat().coerceIn(0f,1f);Card(colors=CardDefaults.cardColors(containerColor=Elevated),shape=RoundedCornerShape(22.dp)){Column(Modifier.padding(18.dp)){Text("Internal Storage",color=Muted);Row(verticalAlignment=Alignment.Bottom){Text(gb(total),style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Spacer(Modifier.width(6.dp));Text("Total",color=Muted);Spacer(Modifier.weight(1f));Text("${(pct*100).toInt()}%",color=Cyan,fontWeight=FontWeight.Bold)};LinearProgressIndicator(progress={pct},modifier=Modifier.fillMaxWidth().padding(vertical=10.dp).height(9.dp),color=Cyan,trackColor=Violet);Row{Text("${gb(used)} Used",color=Muted);Spacer(Modifier.weight(1f));Text("${gb(free)} Free",color=Muted)}}}}
 private fun gb(x:Double)=String.format("%.1f GB",x/1e9)
 @Composable fun Quick(t:String,i:ImageVector,onClick:()->Unit){Card(Modifier.clickable(onClick=onClick),colors=CardDefaults.cardColors(containerColor=Surface),shape=RoundedCornerShape(15.dp)){Column(Modifier.fillMaxSize().padding(8.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.Center){Icon(i,null,tint=if(t=="Apps")Color(0xFF7CFF65) else Cyan,modifier=Modifier.size(28.dp));Text(t,fontWeight=FontWeight.Bold);Text("Open",color=Muted,style=MaterialTheme.typography.labelSmall)}}}
-@Composable fun Files(vm:MainVm){val ctx=LocalContext.current;Column{Header("Files",onBack=if(vm.currentDir.path!=Environment.getExternalStorageDirectory().path)({vm.loadFiles(vm.currentDir.parentFile?:Environment.getExternalStorageDirectory())})else null,action={vm.toolMessage="Use Quick Access or tap any folder to browse it. Long operations respect Android storage access rules."});Row(Modifier.padding(horizontal=16.dp).fillMaxWidth().background(Elevated,RoundedCornerShape(16.dp)).padding(12.dp),verticalAlignment=Alignment.CenterVertically){Icon(Icons.Default.FolderOpen,null,tint=Cyan);Spacer(Modifier.width(8.dp));Text(vm.currentDir.path,color=Muted,maxLines=1)};LazyColumn(contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){items(vm.files){f->FileItem(f){if(f.isDirectory)vm.loadFiles(f)else openFile(ctx,f)}}}}}
-@Composable fun FileItem(f:File,onClick:()->Unit){Row(Modifier.fillMaxWidth().clickable(onClick=onClick).background(Surface,RoundedCornerShape(14.dp)).padding(12.dp),verticalAlignment=Alignment.CenterVertically){Icon(if(f.isDirectory)Icons.Default.Folder else Icons.Default.InsertDriveFile,null,tint=if(f.isDirectory)Color(0xFFFFB52E) else Cyan,modifier=Modifier.size(34.dp));Spacer(Modifier.width(12.dp));Column(Modifier.weight(1f)){Text(f.name,fontWeight=FontWeight.Bold);Text(if(f.isDirectory)"Folder • ${f.listFiles()?.size?:0} items" else "${f.length()/1024} KB • ${DateFormat.getDateInstance().format(Date(f.lastModified()))}",color=Muted,style=MaterialTheme.typography.bodySmall)};Icon(Icons.Default.ChevronRight,null,tint=Muted)}}
+@Composable fun Files(vm:MainVm){val ctx=LocalContext.current;Column{Header("Files",onBack=if(vm.currentDir.path!=Environment.getExternalStorageDirectory().path)({vm.loadFiles(vm.currentDir.parentFile?:Environment.getExternalStorageDirectory())})else null,action={vm.toolMessage="Use Quick Access or tap any folder to browse it. Long operations respect Android storage access rules."});Row(Modifier.padding(horizontal=16.dp).fillMaxWidth().background(Elevated,RoundedCornerShape(16.dp)).padding(12.dp),verticalAlignment=Alignment.CenterVertically){Icon(Icons.Default.FolderOpen,null,tint=Cyan);Spacer(Modifier.width(8.dp));Text(vm.currentDir.path,color=Muted,maxLines=1)};if(vm.filesLoading) LinearProgressIndicator(Modifier.fillMaxWidth(),color=Cyan);LazyColumn(contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){items(vm.files){f->FileItem(f){if(f.isDirectory)vm.loadFiles(f)else openFile(ctx,f)}}}}}
+@Composable fun FileItem(f:File,onClick:()->Unit){Row(Modifier.fillMaxWidth().clickable(onClick=onClick).background(Surface,RoundedCornerShape(14.dp)).padding(12.dp),verticalAlignment=Alignment.CenterVertically){Icon(if(f.isDirectory)Icons.Default.Folder else Icons.Default.InsertDriveFile,null,tint=if(f.isDirectory)Color(0xFFFFB52E) else Cyan,modifier=Modifier.size(34.dp));Spacer(Modifier.width(12.dp));Column(Modifier.weight(1f)){Text(f.name,fontWeight=FontWeight.Bold);Text(if(f.isDirectory)"Folder" else "${f.length()/1024} KB • ${DateFormat.getDateInstance().format(Date(f.lastModified()))}",color=Muted,style=MaterialTheme.typography.bodySmall)};Icon(Icons.Default.ChevronRight,null,tint=Muted)}}
 private fun openFile(ctx:Context,f:File){try{val uri=FileProvider.getUriForFile(ctx,ctx.packageName+".provider",f);ctx.startActivity(Intent(Intent.ACTION_VIEW).apply{setDataAndType(uri,"*/*");addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)})}catch(_:Exception){ctx.startActivity(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="*/*";addCategory(Intent.CATEGORY_OPENABLE)})}}
-@Composable fun Apps(vm:MainVm){val ctx=LocalContext.current;var menu by remember{mutableStateOf(false)};Column{Header("APK Manager",Icons.Default.Android,action={menu=true});if(menu){DropdownMenu(true,{menu=false}){DropdownMenuItem({Text("Sort by name")},{menu=false});DropdownMenuItem({Text("Refresh apps")},{vm.loadApps(ctx);menu=false});DropdownMenuItem({Text("Visible apps: ${vm.apps.size}")},{menu=false})}};Text("${vm.apps.size} visible applications",Modifier.padding(horizontal=16.dp),color=Muted);LazyColumn(contentPadding=PaddingValues(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){items(vm.apps.filter{it.label.contains(vm.query,true)||it.pkg.contains(vm.query,true)}){a->AppItem(a)}}}}
+@Composable fun Apps(vm:MainVm){val ctx=LocalContext.current;var menu by remember{mutableStateOf(false)};Column{Header("APK Manager",Icons.Default.Android,action={menu=true});if(menu){DropdownMenu(true,{menu=false}){DropdownMenuItem({Text("Sort by name")},{menu=false});DropdownMenuItem({Text("Refresh apps")},{vm.loadApps(ctx, force = true);menu=false});DropdownMenuItem({Text("Visible apps: ${vm.apps.size}")},{menu=false})}};Text(if(vm.appsLoading)"Loading applications…" else "${vm.apps.size} visible applications",Modifier.padding(horizontal=16.dp),color=Muted);if(vm.appsLoading) LinearProgressIndicator(Modifier.fillMaxWidth(),color=Cyan);LazyColumn(contentPadding=PaddingValues(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){items(vm.apps.filter{it.label.contains(vm.query,true)||it.pkg.contains(vm.query,true)}){a->AppItem(a)}}}}
 @Composable fun AppItem(a:AppRow){val ctx=LocalContext.current;var menu by remember{mutableStateOf(false)};Row(Modifier.fillMaxWidth().background(Surface,RoundedCornerShape(14.dp)).padding(10.dp),verticalAlignment=Alignment.CenterVertically){if(a.icon!=null)androidx.compose.foundation.Image(a.icon.asPainter(),null,Modifier.size(42.dp))else Icon(Icons.Default.Android,null,tint=Cyan);Spacer(Modifier.width(10.dp));Column(Modifier.weight(1f)){Text(a.label,fontWeight=FontWeight.Bold);Text("${a.version} • ${a.pkg}",color=Muted,style=MaterialTheme.typography.bodySmall)};Box{IconButton({menu=true}){Icon(Icons.Default.MoreVert,null)};DropdownMenu(menu,{menu=false}){DropdownMenuItem({Text("Launch")},{menu=false;try{ctx.startActivity(ctx.packageManager.getLaunchIntentForPackage(a.pkg))}catch(_:Exception){}});DropdownMenuItem({Text("App info")},{menu=false;ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:${a.pkg}")))});DropdownMenuItem({Text("Extract / Share APK")},{menu=false;shareApk(ctx,a)});DropdownMenuItem({Text("Copy package name")},{menu=false})}}}}
 private fun shareApk(ctx:Context,a:AppRow){try{val src=a.source?:return;val out=File(ctx.cacheDir,"${a.pkg}.apk");File(src).copyTo(out,true);val uri=FileProvider.getUriForFile(ctx,ctx.packageName+".provider",out);ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply{type="application/vnd.android.package-archive";putExtra(Intent.EXTRA_STREAM,uri);addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)},"Share extracted APK"))}catch(e:Exception){ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply{type="text/plain";putExtra(Intent.EXTRA_TEXT,a.pkg)},"Share package name"))}}
 @Composable fun Storage(){Column{Header("Storage Analyzer",Icons.Default.PieChart);StorageCard();Text("Accessible storage scope",Modifier.padding(18.dp),color=Muted);Text("Live totals are from shared external storage. The app does not claim a private-app or full-device scan.",Modifier.padding(horizontal=18.dp),color=Color.White)}}

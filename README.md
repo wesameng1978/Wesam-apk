@@ -24,3 +24,6 @@ The app is offline-first and does not request Internet permission. File and pack
 ## GitHub collaboration and automatic builds
 
 Every push runs `.github/workflows/android-build.yml`. Open the repository's **Actions** tab, select **Android Build**, and download the APK/AAB from the completed workflow artifacts. The release AAB is unsigned until a repository signing secret and release signing configuration are added.
+
+## Performance update v1.0.1
+The main file and package scans run off the UI thread, cancel stale scans, cap large directory listings, and show progress while loading.
